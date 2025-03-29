@@ -4,7 +4,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <stdbool.h>
-
+#include <ctype.h>
+#include <stdlib.h>
 
 typedef struct proc_info{
     pid_t pid;
@@ -21,21 +22,45 @@ typedef struct proc_list{
     int capacity;
 }proc_list_t;
 
+void print_process(proc_info_t *proc, int depth, bool show_pids, bool is_last_child, char **prefix_lines);
+void print_process_tree(proc_info_t *root, bool show_pids, bool numeric_sort);
+void recursive_sort(proc_info_t *proc);
+proc_info_t *read_proc_info(const char *pid_str);
+int is_numeric(const char *str);
+proc_list_t *get_all_processes(void);
+void build_process_tree(proc_list_t *list);
+proc_info_t *find_process_by_pid(proc_list_t *list,pid_t pid);
+void free_proc_info(proc_info_t *proc);
+void free_proc_list(proc_list_t *list);
+
 
 int main(int argc ,char *argv[]) {
-    if(argc < 2){
-
-    }
-    const char *command = NULL;
+    bool show_pids = false;
+    bool numeric = false;
     for(int i = 1;i < argc;i++){
-        if(strcmp(argv[i],"--show-pids") == 0 ||strcmp(argv[i],"-p") == 0){
-            command = argv[i++];
-        }else if(strcmp(argv[i],"--numeric-sort") == 0 ||strcmp(argv[i],"-n") == 0){
-            command = argv[i++];
-        }else if(strcmp(argv[i],"--version") == 0 ||strcmp(argv[i],"-V") == 0){
-            command = argv[i++];
+        if(strcmp(argv[i],"-V") == 0 || strcmp(argv[i],"--version") == 0){
+            printf("pstree version 0.1\n");
+            return 0;
+        }else if(strcmp(argv[i],"-p") == 0 || strcmp(argv[i],"--show-pids") == 0){
+            show_pids = true;
+        }else if(strcmp(argv[i],"-n") == 0 || strcmp(argv[i],"--numeric-sort") == 0){
+            numeric = true;
         }
-    } 
+    }
+    proc_list_t *list = get_all_processes();
+    if(!list){
+        fprintf(stderr,"Failed to get process list\n");
+        return 1;
+    }
+    build_process_tree(list);
+    proc_info_t *root = find_process_by_pid(list,1);
+    if(!root){
+        fprintf(stderr,"Failed to get the root process\n");
+        free(list);
+        return 1;
+    }
+    print_process_tree(root,show_pids,numeric);
+    free_proc_list(list);
     return 0;
 }
 
@@ -45,11 +70,10 @@ proc_info_t *read_proc_info(const char *pid_str){
     char path[256];
 
     proc_info_t *proc = malloc(sizeof(proc_info_t));
-    if(proc == NULL){
-        perror("内存分配失败");
+    if(proc == NULL) {
+        perror("memory allocation failure");
         return NULL;
     }
-    //初始化结构体
     proc->pid = -1;
     proc->ppid = -1;
     proc->name[0] = '\0';
@@ -73,6 +97,11 @@ proc_info_t *read_proc_info(const char *pid_str){
         }
     }
     fclose(fp);
+    if(proc->pid == -1 || proc->ppid == -1 || proc->name[0] == '\0'){
+        fprintf(stderr,"Failed to read complete process info for %s\n",pid_str);
+        free(proc);
+        return NULL;
+    }
     return proc;
 }
 
@@ -125,7 +154,6 @@ void build_process_tree(proc_list_t *list){
     }
     for(int i = 0;i < list->count;i++){
         for(int j = 0;j < list->count;j++){
-            if(list->procs[j]->pid == 1) continue;
             if(list->procs[i]->pid == list->procs[j]->ppid){
                 if(list->procs[i]->child_count >= list->procs[i]->child_capacity){
                     list->procs[i]->child_capacity *= 2;
@@ -145,11 +173,95 @@ proc_info_t *find_process_by_pid(proc_list_t *list,pid_t pid){
     return NULL;
 }
 
-//打印整个进程树，从根节点开始
-void print_process_tree(proc_info_t *list,bool show_pids,bool numeric_sort){
-
-}
 //递归打印单个进程及其子进程
-void print_process(proc_info_t *proc,int depth,bool show_pids){
+void print_process(proc_info_t *proc, int depth, bool show_pids, bool is_last_child, char **prefix_lines) {
+    // 打印当前行的前缀（竖线和空格）
+    for (int i = 0; i < depth; i++) {
+        if (prefix_lines[i]) 
+            printf("%s", prefix_lines[i]);
+        else 
+            printf("    ");
+    }
+    
+    // 打印当前节点的连接线和进程名
+    if (depth > 0) {
+        if (is_last_child)
+            printf("└── ");
+        else
+            printf("├── ");
+    }
+    
+    printf("%s", proc->name);
+    if (show_pids) {
+        printf("(%d)", proc->pid);
+    }
+    printf("\n");
 
+    char *old_prefix = NULL;
+    if (depth > 0) {
+        old_prefix = prefix_lines[depth-1];
+    }
+    // 设置新的前缀行
+    if (depth > 0) {
+        if (is_last_child)
+            prefix_lines[depth-1] = "    "; 
+        else
+            prefix_lines[depth-1] = "│   "; 
+    }
+    
+    // 递归打印所有子进程
+    for (int i = 0; i < proc->child_count; i++) {
+        bool is_last = (i == proc->child_count - 1);
+        print_process(proc->children[i], depth + 1, show_pids, is_last, prefix_lines);
+    }
+
+    if (depth > 0 && old_prefix != NULL) {
+        prefix_lines[depth-1] = old_prefix;
+    }
+}
+
+void recursive_sort(proc_info_t *proc) {
+    // 先对当前节点的子节点进行排序
+    for (int i = 0; i < proc->child_count - 1; i++) {
+        for (int j = 0; j < proc->child_count - i - 1; j++) {
+            if (proc->children[j]->pid > proc->children[j + 1]->pid) {
+                proc_info_t *temp = proc->children[j];
+                proc->children[j] = proc->children[j + 1];
+                proc->children[j + 1] = temp;
+            }
+        }
+    }
+    
+    // 递归对每个子节点进行排序
+    for (int i = 0; i < proc->child_count; i++) {
+        recursive_sort(proc->children[i]);
+    }
+}
+
+//打印整个进程树
+void print_process_tree(proc_info_t *root, bool show_pids, bool numeric_sort) {
+    if (numeric_sort) {
+        recursive_sort(root);  // 递归排序整个树
+    }
+    
+    char *prefix_lines[256] = {0}; // 初始化前缀行数组为空
+    print_process(root, 0, show_pids, true, prefix_lines);
+}
+
+//释放资源
+void free_proc_info(proc_info_t *proc){
+    if(proc){
+        if(proc->children) free(proc->children);
+        free(proc);
+    }
+}
+
+void free_proc_list(proc_list_t *list){
+    if(list){
+        for(int i = 0;i < list->count;i ++){
+            free_proc_info(list->procs[i]);
+        }
+        free(list->procs);
+        free(list);
+    }
 }
