@@ -33,6 +33,11 @@ bool compile_and_load_function(const char* function_def) {
     fprintf(fp, "#include <stdbool.h>\n");
     fprintf(fp, "#include <string.h>\n");
     fprintf(fp, "#include <math.h>\n");
+
+    for (int i = 0; i < loaded_function_count; i++) {
+        fprintf(fp, "int %s(int, ...);\n", loaded_functions[i].name);
+    }
+    
     fprintf(fp, "%s\n", function_def);
 
     char so_name[256];
@@ -69,6 +74,7 @@ bool compile_and_load_function(const char* function_def) {
             "gcc",
             "-shared",
             "-fPIC",
+            "-Wno-implicit-function-declaration",  
             "-o",
             so_name,
             template,
@@ -178,6 +184,12 @@ bool evaluate_expression(const char* expression, int* result) {
     fprintf(fp, "#include <stdbool.h>\n");
     fprintf(fp, "#include <string.h>\n");
     fprintf(fp, "#include <math.h>\n");
+
+    // 添加已定义函数的声明
+    for (int i = 0; i < loaded_function_count; i++) {
+        fprintf(fp, "int %s();\n", loaded_functions[i].name);
+    }
+
     fprintf(fp, "int evaluate_user_expression() {\n");
     fprintf(fp, "    return %s;\n", expression);
     fprintf(fp, "}\n");
@@ -214,6 +226,7 @@ bool evaluate_expression(const char* expression, int* result) {
             "gcc",
             "-shared",
             "-fPIC",
+            "-Wno-implicit-function-declaration",  
             "-o",
             so_name,
             template,
@@ -294,14 +307,14 @@ int main() {
         flag = (strncmp(line, "int ", 4) == 0);
         if (flag == 1) {
             if (compile_and_load_function(line)) {
-                printf("successfully loaded function\n");
+                printf("OK.\n");
             }else {
                 printf("failed to load function\n");
             }
         }else {
             int result;
             if (evaluate_expression(line, &result)) {
-                printf("result: %d\n", result);
+                printf("= %d\n", result);
             } else {
                 printf("error evaluating expression\n");
             }
