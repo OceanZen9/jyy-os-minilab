@@ -6,11 +6,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+typedef struct {
+    char *name;
+    void *func_ptr;
+    void *library_handle;
+} LoadedFunction;
+LoadedFunction loaded_functions[100];
+int loaded_function_count = 0;
+
  // Compile a function definition and load it
 bool compile_and_load_function(const char* function_def) {
     char *template = "/tmp/crepl_XXXXXX.c";
     int fd;
-    if ((fd = mkstemp(template, 2)) == -1) {
+    if ((fd = mkstemp(template)) == -1) {
         perror("mkstemp");
         return false;
     }
@@ -95,6 +103,39 @@ bool compile_and_load_function(const char* function_def) {
                     unlink(template);
                     return false;
                 }
+                //提取函数名
+                char func_name[256];
+                const char *start = function_def + strlen("int ");
+                const char *end = strchr(start, '(');
+                if (end == NULL) {
+                    fprintf(stderr, "Invalid function definition.\n");
+                    dlclose(handle);
+                    unlink(template);
+                    return false;
+                }
+                size_t func_name_length = end - start;
+                char *function_name = (char *)malloc(func_name_length + 1);
+                if (function_name == NULL) {
+                    fprintf(stderr, "Memory allocation failed.\n");
+                    dlclose(handle);
+                    unlink(template);
+                    return false;
+                }
+                strncpy(function_name, start, func_name_length);
+                function_name[func_name_length] = '\0';
+                //获取函数结构体
+                loaded_functions[loaded_function_count].func_ptr = dlsym(handle, function_name);
+                if (!loaded_functions[loaded_function_count].func_ptr) {
+                    fprintf(stderr, "Error finding function: %s\n", dlerror());
+                    dlclose(handle);
+                    unlink(template);
+                    return false;
+                }
+                loaded_functions[loaded_function_count].name = func_name;
+                loaded_functions[loaded_function_count].library_handle = handle;
+                loaded_function_count++;
+
+                return true;
             }else {
                 //编译失败
                 fprintf(stderr, "Compilation failed with exit status %d.\n", exit_status);
@@ -114,7 +155,116 @@ bool compile_and_load_function(const char* function_def) {
 
 // Evaluate an expression
 bool evaluate_expression(const char* expression, int* result) {
+    char *template = "/tmp/crepl_XXXXXX.c";
+    int fd;
+    if (fd = mkstemp(template) == -1) {
+        perror("mkstemp");
+        return false;
+    }
 
+    FILE *fp = fdopen(fd, "w");
+    if (fp == NULL) {
+        perror("fdopen");
+        close(fd);
+        unlink(template);
+        return false;
+    }
+    fprintf(fp, "#include <stdio.h>\n");
+    fprintf(fp, "#include <stdlib.h>\n");
+    fprintf(fp, "#include <stdbool.h>\n");
+    fprintf(fp, "#include <string.h>\n");
+    fprintf(fp, "#include <math.h>\n");
+    fprintf(fp, "int evaluate_user_expression() {\n");
+    fprintf(fp, "    return %s;\n", expression);
+    fprintf(fp, "}\n");
+
+    char so_name[256];
+    snprintf(so_name, sizeof(so_name), "%.*s.so", (int)strlen(template) - 2, template);
+    fclose(fp);
+
+    char compile_cmd[512];
+    int pipe_fd[2];
+    if (pipe(pipe_fd) == -1) {
+        perror("pipe");
+        unlink(template);
+        return false;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        unlink(template);
+        return false;
+    }
+    if (pid == 0) {
+        // 关闭管道读取段
+        close(pipe_fd[0]);
+        // 重定向标准输出到管道写入段
+        dup2(pipe_fd[1], STDOUT_FILENO);
+        dup2(pipe_fd[1], STDERR_FILENO);
+        close(pipe_fd[1]);
+
+        // 执行编译命令
+        char *args[] = {
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-o",
+            so_name,
+            template,
+            NULL
+        };
+        execvp("gcc", args);
+        perror("execvp");
+        _exit(EXIT_FAILURE);
+    }else {
+        // 关闭写入端
+        close(pipe_fd[1]);
+        char buffer[4096];
+        ssize_t bytes_read;
+        while ((bytes_read = read(pipe_fd[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            printf("%s", buffer);
+        }
+        close(pipe_fd[0]);
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status)) {
+            int exit_status = WEXITSTATUS(status);
+            if (exit_status == 0) {
+                //编译成功
+                printf("Compilation successful, Shared library created:%s\n", so_name);
+                //加载共享库
+                void *handle = dlopen(so_name, RTLD_NOW);
+                if (!handle) {
+                    fprintf(stderr, "Error loading shared library: %s\n", dlerror());
+                    unlink(template);
+                    return false;
+                }
+                //获取函数指针
+                int (*evaluate_func)() = dlsym(handle, "evaluate_user_expression");
+                if (!evaluate_func) {
+                    fprintf(stderr, "Error finding function: %s\n", dlerror());
+                    dlclose(handle);
+                    unlink(template);
+                    return false;
+                }
+                //调用函数
+                *result = evaluate_func(); //传入参数
+                dlclose(handle);
+                unlink(so_name);
+                unlink(template);
+                return true;
+            }else {
+                //编译失败
+                fprintf(stderr, "Compilation failed with exit status %d.\n", exit_status);
+                unlink(template);
+                return false;
+            }
+        }
+    }
+    
     return false;
 }
 
@@ -155,7 +305,10 @@ int main() {
 
         free(line);
     }
-
-
+    // 释放已加载的函数和库
+    for (int i = 0; i < loaded_function_count; i++) {
+        dlclose(loaded_functions[i].library_handle);
+        free(loaded_functions[i].name);
+    }
     return 0;
 }
