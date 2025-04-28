@@ -103,7 +103,7 @@ bool compile_and_load_function(const char* function_def) {
                 //编译成功
                 printf("Compilation successful, Shared library created:%s\n", so_name);
                 //加载共享库
-                void *handle = dlopen(so_name, RTLD_NOW);
+                void *handle = dlopen(so_name, RTLD_NOW | RTLD_GLOBAL);
                 if (!handle) {
                     fprintf(stderr, "Error loading shared library: %s\n", dlerror());
                     unlink(template);
@@ -111,7 +111,10 @@ bool compile_and_load_function(const char* function_def) {
                     return false;
                 }
                 //提取函数名
-                const char *start = function_def + strlen("int ");
+                const char *start = function_def;
+                while (*start == ' ' || *start == '\t') start++;
+                if (strncmp(start, "int", 3) == 0) start += 3;
+                while (*start == ' ' || *start == '\t') start++;
                 const char *end = strchr(start, '(');
                 if (end == NULL) {
                     fprintf(stderr, "Invalid function definition.\n");
@@ -120,8 +123,11 @@ bool compile_and_load_function(const char* function_def) {
                     unlink(so_name);
                     return false;
                 }
-                size_t func_name_length = end - start;
-                char *function_name = (char *)malloc(func_name_length + 1);
+                const char *name_end = end - 1;
+                while (name_end > start && (*name_end == ' ' || *name_end == '\t')) name_end--;
+                name_end++;
+                size_t func_name_length = name_end - start;
+                char *function_name = malloc(func_name_length + 1);
                 if (function_name == NULL) {
                     fprintf(stderr, "Memory allocation failed.\n");
                     dlclose(handle);
@@ -156,6 +162,7 @@ bool compile_and_load_function(const char* function_def) {
             // 子进程未正常退出
             fprintf(stderr, "Compilaer process terminated abnormally.\n");
             unlink(template);
+            unlink(so_name);
             return false;
         }
     }
@@ -187,7 +194,7 @@ bool evaluate_expression(const char* expression, int* result) {
 
     // 添加已定义函数的声明
     for (int i = 0; i < loaded_function_count; i++) {
-        fprintf(fp, "int %s();\n", loaded_functions[i].name);
+        fprintf(fp, "int %s(int, ...);\n", loaded_functions[i].name);
     }
 
     fprintf(fp, "int evaluate_user_expression() {\n");
@@ -253,7 +260,7 @@ bool evaluate_expression(const char* expression, int* result) {
                 //编译成功
                 printf("Compilation successful, Shared library created:%s\n", so_name);
                 //加载共享库
-                void *handle = dlopen(so_name, RTLD_NOW);
+                void *handle = dlopen(so_name, RTLD_NOW | RTLD_GLOBAL);
                 if (!handle) {
                     fprintf(stderr, "Error loading shared library: %s\n", dlerror());
                     unlink(template);
@@ -314,7 +321,7 @@ int main() {
         }else {
             int result;
             if (evaluate_expression(line, &result)) {
-                printf("= %d\n", result);
+                printf("= %d.\n", result);
             } else {
                 printf("error evaluating expression\n");
             }
