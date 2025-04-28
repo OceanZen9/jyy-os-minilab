@@ -101,16 +101,17 @@ bool compile_and_load_function(const char* function_def) {
                 if (!handle) {
                     fprintf(stderr, "Error loading shared library: %s\n", dlerror());
                     unlink(template);
+                    unlink(so_name);
                     return false;
                 }
                 //提取函数名
-                char func_name[256];
                 const char *start = function_def + strlen("int ");
                 const char *end = strchr(start, '(');
                 if (end == NULL) {
                     fprintf(stderr, "Invalid function definition.\n");
                     dlclose(handle);
                     unlink(template);
+                    unlink(so_name);
                     return false;
                 }
                 size_t func_name_length = end - start;
@@ -119,6 +120,7 @@ bool compile_and_load_function(const char* function_def) {
                     fprintf(stderr, "Memory allocation failed.\n");
                     dlclose(handle);
                     unlink(template);
+                    unlink(so_name);
                     return false;
                 }
                 strncpy(function_name, start, func_name_length);
@@ -129,9 +131,11 @@ bool compile_and_load_function(const char* function_def) {
                     fprintf(stderr, "Error finding function: %s\n", dlerror());
                     dlclose(handle);
                     unlink(template);
+                    unlink(so_name);
+                    free(function_name);
                     return false;
                 }
-                loaded_functions[loaded_function_count].name = func_name;
+                loaded_functions[loaded_function_count].name = function_name;
                 loaded_functions[loaded_function_count].library_handle = handle;
                 loaded_function_count++;
 
@@ -157,7 +161,7 @@ bool compile_and_load_function(const char* function_def) {
 bool evaluate_expression(const char* expression, int* result) {
     char *template = "/tmp/crepl_XXXXXX.c";
     int fd;
-    if (fd = mkstemp(template) == -1) {
+    if ((fd = mkstemp(template)) == -1) {
         perror("mkstemp");
         return false;
     }
