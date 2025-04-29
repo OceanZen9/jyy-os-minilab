@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <readline/history.h>
 
 typedef struct {
     char *name;
@@ -16,7 +17,7 @@ int loaded_function_count = 0;
 
  // Compile a function definition and load it
 bool compile_and_load_function(const char* function_def) {
-    char *template = "/tmp/crepl_XXXXXX.c";
+    char template[] = "/tmp/crepl_XXXXXX";
     int fd;
     if ((fd = mkstemp(template)) == -1) {
         perror("mkstemp");
@@ -41,11 +42,10 @@ bool compile_and_load_function(const char* function_def) {
     fprintf(fp, "%s\n", function_def);
 
     char so_name[256];
-    snprintf(so_name, sizeof(so_name), "%.*s.so", (int)strlen(template) - 2, template);
+    snprintf(so_name, sizeof(so_name), "%.*s.so", (int)strlen(template), template);
 
     fclose(fp);
 
-    char compile_cmd[512];
     int pipe_fd[2];
     if (pipe(pipe_fd) == -1) {
         perror("pipe");
@@ -172,7 +172,7 @@ bool compile_and_load_function(const char* function_def) {
 
 // Evaluate an expression
 bool evaluate_expression(const char* expression, int* result) {
-    char *template = "/tmp/crepl_XXXXXX.c";
+    char template[] = "/tmp/crepl_XXXXXX.c";
     int fd;
     if ((fd = mkstemp(template)) == -1) {
         perror("mkstemp");
@@ -205,7 +205,6 @@ bool evaluate_expression(const char* expression, int* result) {
     snprintf(so_name, sizeof(so_name), "%.*s.so", (int)strlen(template) - 2, template);
     fclose(fp);
 
-    char compile_cmd[512];
     int pipe_fd[2];
     if (pipe(pipe_fd) == -1) {
         perror("pipe");
